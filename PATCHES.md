@@ -94,7 +94,7 @@ grep -rh '^//go:build' "$(go env GOMODCACHE)/github.com/sagernet/sing-box@$(awk 
   | grep -oE 'with_[a-zA-Z0-9_]+' | sort -u
 ```
 
-Currently shipped (6):
+Currently shipped (7):
 
 | Tag                   | Unlocks                                        |
 | --------------------- | ---------------------------------------------- |
@@ -102,6 +102,7 @@ Currently shipped (6):
 | `with_grpc`           | full gRPC transport (vs. the lite HTTP/2 fallback) |
 | `with_gvisor`         | gVisor + mixed TUN stack (sing-tun ships an iOS-tuned TCP buffer); also enables gVisor for wireguard endpoints |
 | `with_quic`           | QUIC transports — Hysteria/Hysteria2/TUIC, QUIC/HTTP3 DNS |
+| `with_tailscale`      | tailscale endpoint (joins a tailnet from inside the NE) |
 | `with_utls`           | uTLS client fingerprinting and client-side REALITY |
 | `with_wireguard`      | wireguard outbound endpoint                    |
 
@@ -116,7 +117,6 @@ Excluded:
 | `with_naive_outbound` | Pulls in `sagernet/cronet-go/all`, which has no Go files for iOS.  |
 | `with_ocm`            | "OCM" service registry runs an HTTP service that proxies the OpenAI API — server-side only. Drops `openai/openai-go/v3`. |
 | `with_reality_server` | Deprecated in 1.13 — folded into `with_utls`; same intentional-build-error pattern. |
-| `with_tailscale`      | iOS users run the standalone Tailscale app; the sing-box `tailscale` endpoint inside an NE is uncommon, and the `derp` service is server-side. Drops the multi-MB `sagernet/tailscale` tree and its transitive deps (gaissmai/bart, vishvananda/netlink, jsimonetti/rtnetlink, …). |
 | `with_v2ray_api`      | gRPC stats *server* — iOS dashboards talk to the clash API instead. Combined with `with_grpc` retention, the only `google.golang.org/grpc` *server* consumer is gone, but the client transport stays. |
 
 When sing-box adds a new `with_*` stub, the grep above will surface

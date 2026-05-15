@@ -40,14 +40,15 @@ go mod tidy
 
 # Build tags enable optional features in upstream cores. We ship the
 # subset that makes sense for an iOS NEPacketTunnelProvider client —
-# inbound/server-only tags and big-tree extras (tailscale, anthropic/
-# openai SDK service registries, ACME issuance, v2ray stats gRPC,
-# DHCP DNS probing) are dropped. See PATCHES.md for the rationale.
+# inbound/server-only tags and big-tree extras (anthropic/openai SDK
+# service registries, ACME issuance, v2ray stats gRPC, DHCP DNS
+# probing) are dropped. See PATCHES.md for the rationale.
 BUILD_TAGS="\
 with_clash_api \
 with_grpc \
 with_gvisor \
 with_quic \
+with_tailscale \
 with_utls \
 with_wireguard"
 
