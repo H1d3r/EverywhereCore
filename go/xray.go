@@ -25,6 +25,14 @@ func (x *xrayRunner) stop() error {
 	return nil
 }
 
+// suspend / resume / updateDefaultInterface are no-ops: xray-core has
+// no public pause hook and no platform interface monitor. The Swift
+// side still calls them on every core to keep the bridge surface
+// uniform.
+func (x *xrayRunner) suspend()                                                {}
+func (x *xrayRunner) resume()                                                 {}
+func (x *xrayRunner) updateDefaultInterface(_ string, _ int32, _, _ bool)     {}
+
 // startXray boots Xray with a TUN inbound bound to the given FD.
 // Xray's iOS TUN path reads the FD from the env var `xray.tun.fd`
 // (see proxy/tun/tun_darwin.go) — the JSON's tun inbound only

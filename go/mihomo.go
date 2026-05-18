@@ -4,8 +4,11 @@ import (
 	"errors"
 	"syscall"
 
+	"github.com/metacubex/mihomo/component/iface"
+	"github.com/metacubex/mihomo/component/resolver"
 	"github.com/metacubex/mihomo/hub"
 	"github.com/metacubex/mihomo/hub/executor"
+	"github.com/metacubex/mihomo/tunnel"
 )
 
 type mihomoRunner struct{}
@@ -13,6 +16,30 @@ type mihomoRunner struct{}
 func (m *mihomoRunner) stop() error {
 	executor.Shutdown()
 	return nil
+}
+
+// suspend stops mihomo's tunnel from accepting new TCP/UDP from the
+// gvisor stack — handleTCPConn/handleUDPConn check tunnel.Status() and
+// drop everything that isn't Running. Existing in-flight connections
+// keep going; only newly arriving packets are short-circuited until
+// resume.
+func (m *mihomoRunner) suspend() {
+	tunnel.OnSuspend()
+}
+
+func (m *mihomoRunner) resume() {
+	tunnel.OnRunning()
+}
+
+// updateDefaultInterface flushes mihomo's interface-address cache and
+// resets the resolver's connection pool. mihomo's dialer.DefaultInterface
+// is intentionally left empty — inside an NEPacketTunnelProvider iOS
+// already routes outbound sockets created in the extension through the
+// underlying physical interface, and pinning a specific name (the
+// NWPathMonitor's "en0"/"pdp_ip0") would race with iOS's own routing.
+func (m *mihomoRunner) updateDefaultInterface(_ string, _ int32, _, _ bool) {
+	iface.FlushCache()
+	resolver.ResetConnection()
 }
 
 // startMihomo boots mihomo with a TUN inbound bound to the given FD.

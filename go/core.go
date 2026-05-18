@@ -13,6 +13,13 @@
 //	StartCore(coreType, configContent,       // boots the proxy core
 //	          tunFD, mtu)                    //   with TUN attached
 //
+// While running:
+//
+//	Suspend()                                // on NE sleep()
+//	Resume()                                 // on NE wake()
+//	UpdateDefaultInterface(name, index,      // on NWPathMonitor
+//	                       expensive, ...)   //   update
+//
 // On teardown:
 //
 //	StopAll()
@@ -40,6 +47,16 @@ var (
 
 type coreRunner interface {
 	stop() error
+	// suspend pauses non-essential activity in the running core
+	// (URL-test probes, keepalives, new-connection handling) until
+	// resume is called. Cores with no native pause hook (xray) leave
+	// this as a no-op.
+	suspend()
+	resume()
+	// updateDefaultInterface tells the core that the device's default
+	// network interface has changed. name == "" / index == -1 means
+	// the device currently has no usable path.
+	updateDefaultInterface(name string, index int32, isExpensive, isConstrained bool)
 }
 
 func Version() string { return "Everywhere Core v0.2" }
@@ -82,6 +99,47 @@ func StartCore(coreType, configContent string, tunFD, mtu int) error {
 		return errors.New(err.Error())
 	}
 	coreInstance = r
+	return nil
+}
+
+// Suspend pauses non-essential activity of the running core. Call it
+// from NEPacketTunnelProvider.sleep() — without that hop, the Go cores
+// keep firing scheduled work (sing-box URL-test probes, mihomo new-
+// connection handling, wireguard keepalives) at full pace through iOS
+// device-sleep windows. Returns nil when no core is running.
+func Suspend() error {
+	mu.Lock()
+	defer mu.Unlock()
+	if coreInstance == nil {
+		return nil
+	}
+	coreInstance.suspend()
+	return nil
+}
+
+// Resume reverses Suspend. Call it from NEPacketTunnelProvider.wake().
+func Resume() error {
+	mu.Lock()
+	defer mu.Unlock()
+	if coreInstance == nil {
+		return nil
+	}
+	coreInstance.resume()
+	return nil
+}
+
+// UpdateDefaultInterface tells the running core the device's default
+// physical interface changed — drive it from an NWPathMonitor on the
+// Swift side. Pass `index = -1` and `name = ""` when there is no
+// usable path. Without these updates, outbound sockets pinned by Go
+// to a stale path keep retransmitting after a WiFi↔cellular handoff.
+func UpdateDefaultInterface(name string, index int32, isExpensive, isConstrained bool) error {
+	mu.Lock()
+	defer mu.Unlock()
+	if coreInstance == nil {
+		return nil
+	}
+	coreInstance.updateDefaultInterface(name, index, isExpensive, isConstrained)
 	return nil
 }
 
