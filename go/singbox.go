@@ -143,8 +143,10 @@ func (p *singBoxPlatform) CreateDefaultInterfaceMonitor(_ logger.Logger) tun.Def
 	return p.monitor
 }
 
-func (p *singBoxPlatform) UsePlatformNetworkInterfaces() bool                     { return false }
-func (p *singBoxPlatform) NetworkInterfaces() ([]adapter.NetworkInterface, error) { return nil, os.ErrInvalid }
+func (p *singBoxPlatform) UsePlatformNetworkInterfaces() bool { return false }
+func (p *singBoxPlatform) NetworkInterfaces() ([]adapter.NetworkInterface, error) {
+	return nil, os.ErrInvalid
+}
 
 func (p *singBoxPlatform) UnderNetworkExtension() bool              { return true }
 func (p *singBoxPlatform) NetworkExtensionIncludeAllNetworks() bool { return false }
@@ -164,6 +166,24 @@ func (p *singBoxPlatform) UsePlatformNotification() bool                  { retu
 func (p *singBoxPlatform) SendNotification(_ *adapter.Notification) error { return nil }
 func (p *singBoxPlatform) MyInterfaceAddress() []netip.Addr               { return p.myAddresses }
 
+func (p *singBoxPlatform) UsePlatformNeighborResolver() bool { return false }
+func (p *singBoxPlatform) StartNeighborMonitor(_ adapter.NeighborUpdateListener) error {
+	return os.ErrInvalid
+}
+func (p *singBoxPlatform) CloseNeighborMonitor(_ adapter.NeighborUpdateListener) error { return nil }
+
+func (p *singBoxPlatform) UsePlatformShell() bool    { return false }
+func (p *singBoxPlatform) CheckPlatformShell() error { return nil }
+func (p *singBoxPlatform) OpenShellSession(_ *adapter.PlatformUser, _ string, _ []string, _ string, _, _ int32) (adapter.ShellSession, error) {
+	return nil, os.ErrInvalid
+}
+func (p *singBoxPlatform) LookupUser(_ string) (*adapter.PlatformUser, error) {
+	return nil, os.ErrInvalid
+}
+func (p *singBoxPlatform) LookupSFTPServer() (string, error)     { return "", os.ErrInvalid }
+func (p *singBoxPlatform) ReadSystemSSHHostKey() ([]byte, error) { return nil, os.ErrInvalid }
+func (p *singBoxPlatform) TailscaleHostname() string             { return "" }
+
 // singBoxInterfaceMonitor is a tun.DefaultInterfaceMonitor driven from
 // outside Go — typically by an NWPathMonitor on the iOS side feeding
 // Evcore.UpdateDefaultInterface. Without this, sing-box's router never
@@ -177,20 +197,20 @@ func (p *singBoxPlatform) MyInterfaceAddress() []netip.Addr               { retu
 // calling callbacks with a nil interface, which the network manager
 // translates into `pauseManager.NetworkPause`.
 type singBoxInterfaceMonitor struct {
-	access      sync.Mutex
-	current     *control.Interface
-	myInterface string
-	callbacks   list.List[tun.DefaultInterfaceUpdateCallback]
+	access       sync.Mutex
+	current      *control.Interface
+	myInterfaces []string
+	callbacks    list.List[tun.DefaultInterfaceUpdateCallback]
 }
 
 func newSingBoxInterfaceMonitor() *singBoxInterfaceMonitor {
 	return &singBoxInterfaceMonitor{}
 }
 
-func (m *singBoxInterfaceMonitor) Start() error                         { return nil }
-func (m *singBoxInterfaceMonitor) Close() error                         { return nil }
-func (m *singBoxInterfaceMonitor) OverrideAndroidVPN() bool             { return false }
-func (m *singBoxInterfaceMonitor) AndroidVPNEnabled() bool              { return false }
+func (m *singBoxInterfaceMonitor) Start() error             { return nil }
+func (m *singBoxInterfaceMonitor) Close() error             { return nil }
+func (m *singBoxInterfaceMonitor) OverrideAndroidVPN() bool { return false }
+func (m *singBoxInterfaceMonitor) AndroidVPNEnabled() bool  { return false }
 
 func (m *singBoxInterfaceMonitor) DefaultInterface() *control.Interface {
 	m.access.Lock()
@@ -213,13 +233,13 @@ func (m *singBoxInterfaceMonitor) UnregisterCallback(element *list.Element[tun.D
 func (m *singBoxInterfaceMonitor) RegisterMyInterface(interfaceName string) {
 	m.access.Lock()
 	defer m.access.Unlock()
-	m.myInterface = interfaceName
+	m.myInterfaces = append(m.myInterfaces, interfaceName)
 }
 
-func (m *singBoxInterfaceMonitor) MyInterface() string {
+func (m *singBoxInterfaceMonitor) MyInterfaces() []string {
 	m.access.Lock()
 	defer m.access.Unlock()
-	return m.myInterface
+	return m.myInterfaces
 }
 
 // updateDefault sets the monitor's default interface and fans out a
