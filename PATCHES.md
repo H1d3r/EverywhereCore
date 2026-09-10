@@ -37,7 +37,7 @@ Xray-core, sing-box, and mihomo all build unmodified from their
 published Go-module tags. The only sources we modify are two
 transitive deps that fight over `expvar.Publish`.
 
-### tailscale forks: rename five expvar names to coexist
+### tailscale forks: rename six expvar names to coexist
 
 Two tailscale forks land in the dep graph and each runs its own
 init():
@@ -48,11 +48,12 @@ init():
   unconditionally.
 
 Both forks ship a copy of `tsweb/varz/varz.go` whose init() calls
-`expvar.Publish` five times with hardcoded names:
+`expvar.Publish` six times with hardcoded names:
 `process_start_unix_time`, `version`, `go_version`,
-`counter_uptime_sec`, `gauge_goroutines`. `expvar.Publish` panics on
-duplicate names — two distinct module paths run two distinct inits
-against the same process-global map → boom on the second:
+`counter_uptime_sec`, `gauge_goroutines`, and `node_boot_time_seconds`.
+`expvar.Publish` panics on duplicate names — two distinct module paths
+run two distinct inits against the same process-global map → boom on
+the second:
 
 ```
 panic: Reuse of exported var name: process_start_unix_time
@@ -63,7 +64,7 @@ panic: Reuse of exported var name: process_start_unix_time
 
 1. Resolve each fork's version via `go list -m`.
 2. Copy the module-cache source into `go/.patched/<vendor>-tailscale@<version>/`.
-3. Sed-rewrite the five `expvar.Publish(...)` calls in
+3. Sed-rewrite the six `expvar.Publish(...)` calls in
    `tsweb/varz/varz.go` to prefix the published name with the
    vendor — `sagernet_process_start_unix_time`,
    `metacubex_version`, etc.
@@ -78,13 +79,22 @@ emitted via Prometheus walk in `varz.Handler`, which iterates the
 global `expvar.Map`. Renaming is invisible unless the host app also
 scrapes that handler and pins exact names, which the iOS NE never does.
 
+`node_boot_time_seconds` is the newest of the six and is the only one
+published conditionally — its value comes from the `btime` line of
+Linux's `/proc/stat`, so the guard fails and the name is never
+published on iOS or macOS. It is renamed anyway: the sed line is free,
+and it keeps the invariant "no name either fork publishes is left
+unprefixed" true by construction rather than by platform accident.
+
 **On upstream bump.** The patch is keyed on the resolved module
 versions, so a new sing-box or mihomo tag that bumps either fork
 just regenerates `.patched/<vendor>-tailscale@<new-version>/`. The
-five sed targets have been stable in `tsweb/varz/varz.go` for years;
-if a fork ever drops or renames them, `grep -c 'expvar.Publish' \
-.patched/<vendor>-tailscale@.../tsweb/varz/varz.go` will show a
-mismatch and the build will surface it.
+sed targets have been stable in `tsweb/varz/varz.go` for years;
+if a fork ever drops, renames, or *adds* one,
+`grep -c 'expvar.Publish' \
+.patched/<vendor>-tailscale@.../tsweb/varz/varz.go` will not equal the
+six `-e` clauses in `Scripts/build.sh` and the mismatch is the signal
+to re-derive the list.
 
 **Upstream-correct fix.** A canonical tailscale fork that both
 sing-box and mihomo agree to share would obviate this. Until then,
@@ -166,11 +176,16 @@ Excluded:
 | --------------------- | ------------------------------------------------------------------ |
 | `with_acme`           | ACME issuance is for *inbound* TLS servers. iOS NE is client-only. Drops `caddyserver/certmagic`, `caddyserver/zerossl`, `mholt/acmez`, `libdns/*`. |
 | `with_ccm`            | "CCM" service registry runs an HTTP service that proxies the Anthropic Claude API — server-side only. Drops `anthropics/anthropic-sdk-go`. |
+| `with_cloudflared`    | New in 1.14. Registers a Cloudflare Tunnel **inbound** (`protocol/cloudflare`) — server-side. Drops `sagernet/sing-cloudflared`. |
 | `with_dhcp`           | `dhcp://auto` DNS transport probes DHCP via a raw socket bound to a named system interface — unreliable from inside the iOS NE sandbox, and iOS configs don't use it. Drops `insomniacslk/dhcp`. |
 | `with_ech`            | Deprecated in 1.13 — ECH moved to Go stdlib; tag's `_stub.go` now intentionally fails the build with that explanation. |
+| `with_external_windivert` | New in 1.14. Selects an out-of-tree WinDivert driver asset; every file under `common/windivert` is `_windows`. Irrelevant on Apple platforms. |
 | `with_naive_outbound` | Pulls in `sagernet/cronet-go/all`, which has no Go files for iOS.  |
 | `with_ocm`            | "OCM" service registry runs an HTTP service that proxies the OpenAI API — server-side only. Drops `openai/openai-go/v3`. |
+| `with_openconnect`    | New in 1.14. Registers an OpenConnect **endpoint** + DNS transport — genuinely client-side, so this is a deliberate hold rather than an automatic exclusion: no Everywhere config uses OpenConnect today, and enabling it pulls `sagernet/sing-openconnect`. Revisit if the app adds OpenConnect profiles. |
+| `with_openvpn`        | New in 1.14. Same story as `with_openconnect` — OpenVPN endpoint + DNS transport, client-side, held pending a config that needs it. Drops `sagernet/sing-openvpn`. |
 | `with_reality_server` | Deprecated in 1.13 — folded into `with_utls`; same intentional-build-error pattern. |
+| `with_usbip`          | New in 1.14. USB/IP device-sharing *service* — a desktop-daemon feature, and its `include` registration is gated on `darwin && cgo`/`linux`/`windows` anyway. Drops `sagernet/sing-usbip`. |
 | `with_v2ray_api`      | gRPC stats *server* — iOS dashboards talk to the clash API instead. Combined with `with_grpc` retention, the only `google.golang.org/grpc` *server* consumer is gone, but the client transport stays. |
 
 When sing-box adds a new `with_*` stub, the grep above will surface
@@ -194,6 +209,52 @@ the tunnel comes up. See `EverywhereCore/singbox.go`.
 **On upstream bump.** Verify `include.Context` is still the canonical
 entry point — the registry surface has been refactored a couple of
 times in 1.x.
+
+### sing-box: `singBoxPlatform` must track `adapter.PlatformInterface`
+
+`go/singbox.go`'s `singBoxPlatform` is a hand-written implementation of
+`adapter.PlatformInterface`, and Go interface satisfaction is all-or-
+nothing: sing-box adding *one* method to that interface breaks our build
+with `cannot use pi (variable of type *singBoxPlatform) as
+adapter.PlatformInterface value`. This is the single most likely way an
+upstream bump breaks the build, because the interface is sing-box's
+mobile-embedder seam and it grows every minor release.
+
+1.14 changed it in three ways at once:
+
+- **Added** `ProcessPlatformOptions`, `CancelNotification`, the neighbor
+  trio (`UsePlatformNeighborResolver`, `StartNeighborMonitor`,
+  `CloseNeighborMonitor`), the platform-shell set (`UsePlatformShell`,
+  `CheckPlatformShell`, `OpenShellSession`, `LookupUser`,
+  `LookupSFTPServer`, `ReadSystemSSHHostKey`, `TailscaleHostname`), and
+  the bridge pair (`UsePlatformBridge`, `CreateBridge`).
+- **Changed** `ReadWIFIState()` → `ReadWIFIState(ctx context.Context)`,
+  so the call from `NetworkManager.UpdateWIFIState(ctx)` is cancellable.
+- **Removed** `SystemCertificates()`. Extra methods don't break
+  satisfaction, so a stale one lingers silently — ours was deleted.
+
+Every added method declines the capability, matching what libbox's own
+`platformInterfaceStub` returns for an embedder that can't offer it. The
+two returns that are *not* errors are load-bearing:
+`ProcessPlatformOptions` must return nil (the tun inbound closes the
+interface and fails startup if it errors — it is only meaningful for
+desktop `platform.http_proxy` wiring), and `CheckPlatformShell` must
+return nil because it is a capability probe, not a failure path.
+
+**On upstream bump.** Diff the interface against our implementation
+rather than reading the compiler error alone — a bump can silently
+*remove* a method too:
+
+```bash
+( cd go && go mod download github.com/sagernet/sing-box )
+sed -n '/type PlatformInterface interface {/,/^}/p' \
+  "$(go env GOMODCACHE)/github.com/sagernet/sing-box@$(awk '/sing-box v/{print $2; exit}' go/go.mod)/adapter/platform.go"
+grep -c 'func (p \*singBoxPlatform)' go/singbox.go
+```
+
+The counts should match; libbox's `platformInterfaceStub` in
+`experimental/libbox/config.go` is the reference for what each new
+method should return.
 
 ### mihomo: must call `hub.ApplyConfig`, not `executor.ApplyConfig`
 

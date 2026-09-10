@@ -138,6 +138,16 @@ func (p *singBoxPlatform) OpenInterface(options *tun.Options, _ option.TunPlatfo
 	return tun.New(*options)
 }
 
+// ProcessPlatformOptions is where desktop platforms apply the tun
+// inbound's `platform.http_proxy` block to the OS proxy settings. iOS
+// has no such system-wide knob from inside a Network Extension, so
+// this is a no-op — same as libbox's own stub. The tun inbound calls
+// it right after OpenInterface and tears the interface back down if
+// it returns an error, so returning nil is load-bearing.
+func (p *singBoxPlatform) ProcessPlatformOptions(_ option.TunPlatformOptions) error {
+	return nil
+}
+
 func (p *singBoxPlatform) UsePlatformDefaultInterfaceMonitor() bool { return true }
 func (p *singBoxPlatform) CreateDefaultInterfaceMonitor(_ logger.Logger) tun.DefaultInterfaceMonitor {
 	return p.monitor
@@ -153,8 +163,13 @@ func (p *singBoxPlatform) NetworkExtensionIncludeAllNetworks() bool { return fal
 
 func (p *singBoxPlatform) ClearDNSCache()                       {}
 func (p *singBoxPlatform) RequestPermissionForWIFIState() error { return nil }
-func (p *singBoxPlatform) ReadWIFIState() adapter.WIFIState     { return adapter.WIFIState{} }
-func (p *singBoxPlatform) SystemCertificates() []string         { return nil }
+
+// ReadWIFIState took a context in 1.14 — sing-box now calls it from
+// NetworkManager.UpdateWIFIState(ctx) so a slow platform-side lookup
+// can be cancelled. We answer from memory, so the context is unused.
+func (p *singBoxPlatform) ReadWIFIState(_ context.Context) adapter.WIFIState {
+	return adapter.WIFIState{}
+}
 
 func (p *singBoxPlatform) UsePlatformConnectionOwnerFinder() bool { return false }
 func (p *singBoxPlatform) FindConnectionOwner(_ *adapter.FindConnectionOwnerRequest) (*adapter.ConnectionOwner, error) {
@@ -164,27 +179,47 @@ func (p *singBoxPlatform) FindConnectionOwner(_ *adapter.FindConnectionOwnerRequ
 func (p *singBoxPlatform) UsePlatformWIFIMonitor() bool                   { return false }
 func (p *singBoxPlatform) UsePlatformNotification() bool                  { return false }
 func (p *singBoxPlatform) SendNotification(_ *adapter.Notification) error { return nil }
-func (p *singBoxPlatform) MyInterfaceAddress() []netip.Addr               { return p.myAddresses }
 
-// Uncomment when upstream-watch bumps to a stable 1.14.
-//
-// func (p *singBoxPlatform) UsePlatformNeighborResolver() bool { return false }
-// func (p *singBoxPlatform) StartNeighborMonitor(_ adapter.NeighborUpdateListener) error {
-// 	return os.ErrInvalid
-// }
-// func (p *singBoxPlatform) CloseNeighborMonitor(_ adapter.NeighborUpdateListener) error { return nil }
-//
-// func (p *singBoxPlatform) UsePlatformShell() bool    { return false }
-// func (p *singBoxPlatform) CheckPlatformShell() error { return nil }
-// func (p *singBoxPlatform) OpenShellSession(_ *adapter.PlatformUser, _ string, _ []string, _ string, _, _ int32) (adapter.ShellSession, error) {
-// 	return nil, os.ErrInvalid
-// }
-// func (p *singBoxPlatform) LookupUser(_ string) (*adapter.PlatformUser, error) {
-// 	return nil, os.ErrInvalid
-// }
-// func (p *singBoxPlatform) LookupSFTPServer() (string, error)     { return "", os.ErrInvalid }
-// func (p *singBoxPlatform) ReadSystemSSHHostKey() ([]byte, error) { return nil, os.ErrInvalid }
-// func (p *singBoxPlatform) TailscaleHostname() string             { return "" }
+// CancelNotification is new in 1.14; it pairs with SendNotification so
+// a core can retract a notification it posted. We never post one.
+func (p *singBoxPlatform) CancelNotification(_ string, _ int32) error { return nil }
+
+func (p *singBoxPlatform) MyInterfaceAddress() []netip.Addr { return p.myAddresses }
+
+// Neighbor resolution (1.14) backs tailscale's peer/MAC lookups. iOS
+// gives a Network Extension no ARP/NDP table, so we decline: with
+// UsePlatformNeighborResolver false, sing-box never calls the monitor
+// hooks and falls back to its own resolver.
+func (p *singBoxPlatform) UsePlatformNeighborResolver() bool { return false }
+func (p *singBoxPlatform) StartNeighborMonitor(_ adapter.NeighborUpdateListener) error {
+	return os.ErrInvalid
+}
+func (p *singBoxPlatform) CloseNeighborMonitor(_ adapter.NeighborUpdateListener) error { return nil }
+
+// Platform shell (1.14) is what lets a tailscale endpoint serve SSH
+// into the host. That is a desktop-daemon capability — an iOS NE has
+// no PTY, no user database, and no SFTP server — so every hook
+// declines. CheckPlatformShell returns nil (not an error) to match
+// libbox: it is a capability probe, not a failure path.
+func (p *singBoxPlatform) UsePlatformShell() bool    { return false }
+func (p *singBoxPlatform) CheckPlatformShell() error { return nil }
+func (p *singBoxPlatform) OpenShellSession(_ *adapter.PlatformUser, _ string, _ []string, _ string, _, _ int32) (adapter.ShellSession, error) {
+	return nil, os.ErrInvalid
+}
+func (p *singBoxPlatform) LookupUser(_ string) (*adapter.PlatformUser, error) {
+	return nil, os.ErrInvalid
+}
+func (p *singBoxPlatform) LookupSFTPServer() (string, error)     { return "", os.ErrInvalid }
+func (p *singBoxPlatform) ReadSystemSSHHostKey() ([]byte, error) { return nil, os.ErrInvalid }
+func (p *singBoxPlatform) TailscaleHostname() string             { return "" }
+
+// Bridge (1.14) asks the platform for a second utun to hand another
+// process. NEPacketTunnelProvider owns exactly one interface, so we
+// decline and sing-box skips the feature.
+func (p *singBoxPlatform) UsePlatformBridge() bool { return false }
+func (p *singBoxPlatform) CreateBridge(_ adapter.BridgeOptions) (adapter.BridgeSession, error) {
+	return nil, os.ErrInvalid
+}
 
 // singBoxInterfaceMonitor is a tun.DefaultInterfaceMonitor driven from
 // outside Go — typically by an NWPathMonitor on the iOS side feeding

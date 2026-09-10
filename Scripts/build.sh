@@ -39,11 +39,15 @@ cd "$CORE_DIR"
 # --- Symmetric varz patch -------------------------------------------------
 # Two tailscale forks live in the dep graph: github.com/sagernet/tailscale
 # (sing-box, gated on with_tailscale) and github.com/metacubex/tailscale
-# (mihomo, unconditional). Each fork's tsweb/varz/init() registers five
+# (mihomo, unconditional). Each fork's tsweb/varz/init() registers six
 # expvars with hardcoded names ("process_start_unix_time", "version",
-# "go_version", "counter_uptime_sec", "gauge_goroutines"). expvar.Publish
-# panics on duplicate names — two distinct module paths run two distinct
-# init()s against the same process-global registry → boom on the second.
+# "go_version", "counter_uptime_sec", "gauge_goroutines", and — behind a
+# /proc/stat probe that only succeeds on Linux — "node_boot_time_seconds").
+# expvar.Publish panics on duplicate names — two distinct module paths run
+# two distinct init()s against the same process-global registry → boom on
+# the second. We rename the sixth too even though its guard makes it dead
+# on Apple platforms: it costs one sed line and keeps the invariant
+# "no name either fork publishes is left unprefixed" true by construction.
 #
 # We patch each fork in a writable copy of its module-cache source,
 # prefix each published name with the fork's vendor so they coexist,
@@ -89,6 +93,7 @@ apply_varz_patch() {
             -e "s/expvar\.Publish(\"go_version\"/expvar.Publish(\"${prefix}_go_version\"/" \
             -e "s/expvar\.Publish(\"counter_uptime_sec\"/expvar.Publish(\"${prefix}_counter_uptime_sec\"/" \
             -e "s/expvar\.Publish(\"gauge_goroutines\"/expvar.Publish(\"${prefix}_gauge_goroutines\"/" \
+            -e "s/expvar\.Publish(\"node_boot_time_seconds\"/expvar.Publish(\"${prefix}_node_boot_time_seconds\"/" \
             "$dest/tsweb/varz/varz.go"
         rm -f "$dest/tsweb/varz/varz.go.bak"
     fi
